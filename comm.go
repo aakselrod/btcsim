@@ -16,6 +16,7 @@
 
 package main
 
+/*
 import (
 	"errors"
 	"fmt"
@@ -619,3 +620,4 @@ func (com *Communication) txPoolRecv(wg *sync.WaitGroup) {
 	case <-com.exit:
 	}
 }
+*/

@@ -17,52 +17,39 @@
 package main
 
 import (
-	"encoding/csv"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/btcsuite/btcutil"
+	"gopkg.in/yaml.v2"
 )
 
-// Row represents a row in the CSV file
-// and holds the key and value ints
-type Row struct {
-	utxoCount int
-	txCount   int
+// SimCommand represents a single command in the CSV file and holds
+// all of the arguments (though some may be nil, depending on command).
+type SimCommand struct {
+	Cmd   string
+	Name  string `yaml:omitempty`
+	Name2 string `yaml:omitempty`
+	Var   string `yaml:omitempty`
+	Num   uint32 `yaml:omitempty`
+	Num2  uint32 `yaml:omitempty`
 }
 
-// readCSV reads the given filename and
-// returns a slice of rows
-func readCSV(r io.Reader) (map[int32]*Row, error) {
-	m := make(map[int32]*Row)
-	reader := csv.NewReader(r)
-	for {
-		row, err := reader.Read()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
-		}
-		b, err := strconv.Atoi(row[0])
-		if err != nil {
-			return nil, err
-		}
-		u, err := strconv.Atoi(row[1])
-		if err != nil {
-			return nil, err
-		}
-		t, err := strconv.Atoi(row[2])
-		if err != nil {
-			return nil, err
-		}
-		m[int32(b)] = &Row{u, t}
+// readYAML reads the given filename and returns a slice of commands
+func readYAML(simFilePath string) ([]SimCommand, error) {
+	var commands []SimCommand
+	yamlBytes, err := ioutil.ReadFile(simFilePath)
+	if err != nil {
+		return nil, err
 	}
-	return m, nil
+	err = yaml.Unmarshal(yamlBytes, &commands)
+	if err != nil {
+		return nil, err
+	}
+	return commands, nil
 }
 
 func getLogFile(prefix string) (*os.File, error) {

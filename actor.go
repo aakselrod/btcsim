@@ -18,7 +18,7 @@ package main
 
 import (
 	"errors"
-	"fmt"
+	//"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -89,7 +89,6 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 	a := Actor{
 		Node:             btcwallet,
 		quit:             make(chan struct{}),
-		ownedAddresses:   make([]btcutil.Address, *maxAddresses),
 		miningAddr:       make(chan btcutil.Address),
 		walletPassphrase: "password",
 		utxoQueue: &utxoQueue{
@@ -111,13 +110,13 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 // If the RPC client connection cannot be established or wallet cannot
 // be created, the wallet process is killed and the actor directory
 // removed.
-func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
+func (a *Actor) Start(stderr, stdout io.Writer /*, com *Communication*/) error {
 	connected := make(chan struct{})
 	const timeoutSecs int64 = 3600 * 24
 
 	if err := a.Node.Start(); err != nil {
 		a.Shutdown()
-		com.errChan <- struct{}{}
+		//com.errChan <- struct{}{}
 		return err
 	}
 
@@ -130,7 +129,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 
 	if err := a.Connect(); err != nil {
 		a.Shutdown()
-		com.errChan <- struct{}{}
+		//com.errChan <- struct{}{}
 		return err
 	}
 
@@ -139,49 +138,53 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 
 	// Wait for wallet sync
 	for i := 0; i < *maxConnRetries; i++ {
-		if _, err := a.client.GetBalance(""); err != nil {
+		if _, err := a.client.GetBalance("default"); err != nil {
 			time.Sleep(time.Duration(i) * 50 * time.Millisecond)
 			continue
 		}
 		break
 	}
 
-	// Create wallet addresses and unlock wallet.
-	log.Printf("%s: Creating wallet addresses...", a)
-	for i := range a.ownedAddresses {
-		fmt.Printf("\r%d/%d", i+1, len(a.ownedAddresses))
-		addr, err := a.client.GetNewAddress("")
-		if err != nil {
-			log.Printf("%s: Cannot create address #%d", a, i+1)
-			com.errChan <- struct{}{}
-			return err
+	/*
+		// Create wallet addresses and unlock wallet.
+		log.Printf("%s: Creating wallet addresses...", a)
+		for i := range a.ownedAddresses {
+			fmt.Printf("\r%d/%d", i+1, len(a.ownedAddresses))
+			addr, err := a.client.GetNewAddress("")
+			if err != nil {
+				log.Printf("%s: Cannot create address #%d", a, i+1)
+				//com.errChan <- struct{}{}
+				return err
+			}
+			a.ownedAddresses[i] = addr
 		}
-		a.ownedAddresses[i] = addr
-	}
-	fmt.Printf("\n")
+		fmt.Printf("\n")
+	*/
 
 	if err := a.client.WalletPassphrase(a.walletPassphrase, timeoutSecs); err != nil {
 		log.Printf("%s: Cannot unlock wallet: %v", a, err)
-		com.errChan <- struct{}{}
+		//com.errChan <- struct{}{}
 		return err
 	}
 
-	// Send a random address that will be used by the cpu miner.
-	a.miningAddr <- a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
+	/*
+		// Send a random address that will be used by the cpu miner.
+		a.miningAddr <- a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
 
-	// Start a goroutine that queues up a set of utxos belonging to this
-	// actor. The utxos are sent from com.poolUtxos which in turn receives
-	// block notifications from sim.go
-	a.wg.Add(1)
-	go a.queueUtxos()
+		// Start a goroutine that queues up a set of utxos belonging to this
+		// actor. The utxos are sent from com.poolUtxos which in turn receives
+		// block notifications from sim.go
+		a.wg.Add(1)
+		go a.queueUtxos()
 
-	// Start a goroutine to simulate transactions.
-	a.wg.Add(1)
-	go a.simulateTx(com.downstream, com.txpool)
+		// Start a goroutine to simulate transactions.
+		a.wg.Add(1)
+		go a.simulateTx(com.downstream, com.txpool)
 
-	// Start a goroutine to split utxos
-	a.wg.Add(1)
-	go a.splitUtxos(com.split, com.txpool)
+		// Start a goroutine to split utxos
+		a.wg.Add(1)
+		go a.splitUtxos(com.split, com.txpool)
+	*/
 
 	return nil
 }

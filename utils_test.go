@@ -25,6 +25,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 )
 
+/*
 // fakeReader implements the io.Reader interface and is used to force
 // read errors
 type fakeReader struct {
@@ -76,3 +77,4 @@ func TestReadCSVErrors(t *testing.T) {
 		t.Errorf("readCSV expected error, got %v", err)
 	}
 }
+*/

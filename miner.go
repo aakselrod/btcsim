@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/btcsuite/btcd/wire"
-	rpc "github.com/btcsuite/btcrpcclient"
+	//"github.com/btcsuite/btcd/wire"
+	//rpc "github.com/btcsuite/btcrpcclient"
 	"github.com/btcsuite/btcutil"
 )
 
@@ -33,33 +33,8 @@ type Miner struct {
 
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
-func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
-	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
-
-	ntfnHandlers := &rpc.NotificationHandlers{
-		// When a block higher than stopBlock connects to the chain,
-		// send a signal to stop actors. This is used so main can break from
-		// select and call actor.Stop to stop actors.
-		OnBlockConnected: func(hash *wire.ShaHash, h int32) {
-			if h >= int32(*startBlock)-1 {
-				if height != nil {
-					height <- h
-				}
-			} else {
-				fmt.Printf("\r%d/%d", h, *startBlock)
-			}
-		},
-		// Send a signal that a tx has been accepted into the mempool. Based on
-		// the tx curve, the receiver will need to wait until required no of tx
-		// are filled up in the mempool
-		OnTxAccepted: func(hash *wire.ShaHash, amount btcutil.Amount) {
-			if txpool != nil {
-				// this will not be blocked because we're creating only
-				// required no of tx and receiving all of them
-				txpool <- struct{}{}
-			}
-		},
-	}
+func NewMiner(miningAddrs []btcutil.Address, connNode Node, listen uint16,
+	rpcListen uint16) (*Miner, error) {
 
 	log.Println("Starting miner on simnet...")
 	args, err := newBtcdArgs("miner")
@@ -69,8 +44,8 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 
 	// set miner args - it listens on a different port
 	// because a node is already running on the default port
-	args.Listen = "127.0.0.1:18550"
-	args.RPCListen = "127.0.0.1:18551"
+	args.Listen = fmt.Sprintf("127.0.0.1:%v", listen)
+	args.RPCListen = fmt.Sprintf("127.0.0.1:%v", rpcListen)
 	// need to log mining details, so set debuglevel
 	args.DebugLevel = "MINR=trace"
 	// if passed, set blockmaxsize to allow mining large blocks
@@ -83,11 +58,14 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		}
 	}
 
+	args.Extra = append(args.Extra, fmt.Sprintf("--addpeer=127.0.0.1:%v",
+		(connNode.Args.(*btcdArgs)).Listen))
+
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
 		log.Printf("Cannot get log file, logging disabled: %v", err)
 	}
-	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+	node, err := NewNodeFromArgs(args, nil /*ntfnHandlers*/, logFile)
 
 	miner := &Miner{
 		Node: node,
@@ -101,38 +79,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		return nil, err
 	}
 
-	// Register for transaction notifications
-	if err := miner.client.NotifyNewTransactions(false); err != nil {
-		log.Printf("%s: Cannot register for transactions notifications: %v", miner, err)
-		return miner, err
-	}
-
-	// Register for block notifications.
-	if err := miner.client.NotifyBlocks(); err != nil {
-		log.Printf("%s: Cannot register for block notifications: %v", miner, err)
-		return miner, err
-	}
-
-	log.Printf("%s: Generating %v blocks...", miner, *startBlock)
 	return miner, nil
-}
-
-// StartMining sets the cpu miner to mine coins
-func (m *Miner) StartMining() error {
-	if err := m.client.SetGenerate(true, 1); err != nil {
-		log.Printf("%s: Cannot start mining: %v", m, err)
-		return err
-	}
-	return nil
-}
-
-// StopMining stops the cpu miner from mining coins
-func (m *Miner) StopMining() error {
-	if err := m.client.SetGenerate(false, 0); err != nil {
-		log.Printf("%s: Cannot stop mining: %v", m, err)
-		return err
-	}
-	return nil
 }
 
 // Generate makes the CPU miner mine the requested number of blocks

@@ -17,13 +17,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
-	"math"
+	//"math"
 	"os"
 	"time"
 
-	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcd/chaincfg"
+	//"github.com/btcsuite/btcd/wire"
 	rpc "github.com/btcsuite/btcrpcclient"
 	"github.com/btcsuite/btcutil"
 )
@@ -48,76 +50,53 @@ const (
 
 // Simulation contains the data required to run a simulation
 type Simulation struct {
-	txCurve map[int32]*Row
-	com     *Communication
-	actors  []*Actor
+	commands []SimCommand
+	/*com         *Communication*/
+	nodes       map[string]*Node
+	actors      map[string]*Actor
+	miners      map[string]*Miner
+	connections map[string][]string
+	vars        map[string][]string
 }
 
 // NewSimulation returns a Simulation instance
 func NewSimulation() *Simulation {
 	s := &Simulation{
-		txCurve: make(map[int32]*Row),
-		actors:  make([]*Actor, 0, *numActors),
-		com:     NewCommunication(),
+		/*com: NewCommunication(),*/
+		nodes:       make(map[string]*Node),
+		actors:      make(map[string]*Actor),
+		miners:      make(map[string]*Miner),
+		connections: make(map[string][]string),
+		vars:        make(map[string][]string),
 	}
 	return s
 }
 
-// readTxCurve reads and sets the txcurve to simulate
-// It defaults to a simple linears simulation
-func (s *Simulation) readTxCurve(txCurvePath string) error {
-	var txCurve map[int32]*Row
-	if txCurvePath == "" {
-		// if -txcurve argument is omitted, use a simple
-		// linear simulation curve as the default
-		txCurve = make(map[int32]*Row, SimRows)
-		for i := 1; i <= SimRows; i++ {
-			block := int32(*startBlock + i)
-			txCurve[block] = &Row{
-				utxoCount: i * SimUtxoCount,
-				txCount:   i * SimTxCount,
+// readSimFile reads and sets the commands to perform the simulation
+// It defaults to a simple linear simulation
+func (s *Simulation) readSimFile(simFilePath string) error {
+	if simFilePath == "" {
+		// if -simfile argument is omitted, use a simple
+		// linear simulation as the default
+		commands := make([]SimCommand, SimRows)
+		for i := 0; i < SimRows; i++ {
+			commands[i] = SimCommand{
+				Name: "testcommand",
 			}
 		}
+		s.commands = commands
 	} else {
-		file, err := os.Open(txCurvePath)
-		defer file.Close()
+		commands, err := readYAML(simFilePath)
 		if err != nil {
 			return err
 		}
-		txCurve, err = readCSV(file)
-		if err != nil {
-			return err
-		}
+		s.commands = commands
 	}
-	s.txCurve = txCurve
 	return nil
 }
 
-// updateFlags updates the flags based on the txCurve
-func (s *Simulation) updateFlags() {
-	// set min block height from the curve as startBlock
-	// and max block height as stopBlock
-	for k := range s.txCurve {
-		block := int(k)
-		if block < *startBlock {
-			*startBlock = block
-		}
-		if block > *stopBlock {
-			*stopBlock = block
-		}
-	}
-
-	if *maxSplit > *maxAddresses {
-		// cap max split at maxaddresses, becauase each split requires
-		// a unique return address
-		*maxSplit = *maxAddresses
-	}
-}
-
-// Start runs the simulation by launching a node, actors and com.Start
-// which communicates with the actors. It waits until the simulation
-// finishes or is interrupted
-func (s *Simulation) Start() error {
+// Run runs the simulation in order
+func (s *Simulation) Run() error {
 
 	// re-use existing cert, key if both are present
 	// if only one of cert, key is missing, exit with err message
@@ -137,6 +116,7 @@ func (s *Simulation) Start() error {
 	}
 
 	ntfnHandlers := &rpc.NotificationHandlers{
+	/*
 		OnBlockConnected: func(hash *wire.ShaHash, height int32) {
 			block := &Block{
 				hash:   hash,
@@ -150,70 +130,424 @@ func (s *Simulation) Start() error {
 		OnTxAccepted: func(hash *wire.ShaHash, amount btcutil.Amount) {
 			s.com.timeReceived <- time.Now()
 		},
+	*/
 	}
 
-	log.Println("Starting node on simnet...")
-	args, err := newBtcdArgs("node")
-	if err != nil {
-		log.Printf("Cannot create node args: %v", err)
-		return err
-	}
-	logFile, err := getLogFile(args.prefix)
-	if err != nil {
-		log.Printf("Cannot get log file, logging disabled: %v", err)
-	}
-	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
-	if err != nil {
-		log.Printf("%s: Cannot create node: %v", node, err)
-		return err
-	}
-	if err := node.Start(); err != nil {
-		log.Printf("%s: Cannot start node: %v", node, err)
-		return err
-	}
-	if err := node.Connect(); err != nil {
-		log.Printf("%s: Cannot connect to node: %v", node, err)
-		return err
-	}
+	unusedPort := uint16(18550)
 
-	// Register for block notifications.
-	if err := node.client.NotifyBlocks(); err != nil {
-		log.Printf("%s: Cannot register for block notifications: %v", node, err)
-		return err
-	}
-
-	// Register for transaction notifications
-	if err := node.client.NotifyNewTransactions(false); err != nil {
-		log.Printf("%s: Cannot register for transactions notifications: %v", node, err)
-		return err
-	}
-
-	for i := 0; i < *numActors; i++ {
-		a, err := NewActor(node, uint16(18557+i))
-		if err != nil {
-			log.Printf("%s: Cannot create actor: %v", a, err)
-			continue
+	for _, cmd := range s.commands {
+		switch cmd.Cmd {
+		case "startnode":
+			if cmd.Name == "" {
+				log.Printf("Node name can't be blank")
+				return errors.New("node name is blank")
+			}
+			if _, used := s.nodes[cmd.Name]; used {
+				log.Printf("Name %v already used", cmd.Name)
+				return errors.New("duplicate name for node")
+			}
+			args, err := newBtcdArgs(cmd.Name)
+			if err != nil {
+				log.Printf("Cannot create node args: %v", err)
+				return err
+			}
+			logFile, err := getLogFile(args.prefix)
+			if err != nil {
+				log.Printf("Cannot get log file, logging disabled: %v", err)
+			}
+			args.Listen = fmt.Sprintf("127.0.0.1:%v", unusedPort)
+			unusedPort++
+			args.RPCListen = fmt.Sprintf("127.0.0.1:%v", unusedPort)
+			unusedPort++
+			var connNode Node
+			if cmd.Name2 != "" {
+				connNode, used := s.nodes[cmd.Name2]
+				if !used {
+					log.Printf("%v is not an existing node", cmd.Name2)
+					return errors.New("node doesn't exist")
+				}
+				args.Extra = append(args.Extra,
+					fmt.Sprintf("--addpeer=%v", (connNode.Args.(*btcdArgs)).Listen))
+			}
+			log.Printf("Starting node %v on simnet...", cmd.Name)
+			node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+			if err != nil {
+				log.Printf("%s: Cannot create node: %v", node, err)
+				return err
+			}
+			if err := node.Start(); err != nil {
+				log.Printf("%s: Cannot start node: %v", node, err)
+				return err
+			}
+			if err := node.Connect(); err != nil {
+				log.Printf("%s: Cannot connect to node: %v", node, err)
+				return err
+			}
+			s.nodes[cmd.Name] = node
+			if cmd.Name2 != "" {
+				s.connections[cmd.Name] = []string{cmd.Name2}
+				log.Printf("Waiting for synchronization")
+				for {
+					hash1, err := node.client.GetBestBlockHash()
+					if err != nil {
+						log.Printf("Error getting best block hash from %v: %v",
+							cmd.Name, err)
+						return err
+					}
+					hash2, err := connNode.client.GetBestBlockHash()
+					if err != nil {
+						log.Printf("Error getting best block hash from %v: %v",
+							cmd.Name2, err)
+						return err
+					}
+					if hash1.String() == hash2.String() {
+						break
+					}
+					time.Sleep(time.Second)
+				}
+			}
+		case "startwallet":
+			if cmd.Name == "" {
+				log.Printf("Wallet name can't be blank")
+				return errors.New("wallet name is blank")
+			}
+			if cmd.Name2 == "" {
+				log.Printf("Wallet must connect to an existing node")
+				return errors.New("no node name passed to wallet")
+			}
+			if _, used := s.nodes[cmd.Name]; used {
+				log.Printf("Name %v already used", cmd.Name)
+				return errors.New("duplicate name for wallet")
+			}
+			connNode, used := s.nodes[cmd.Name2]
+			if !used {
+				log.Printf("%v is not an existing node", cmd.Name2)
+				return errors.New("node doesn't exist")
+			}
+			log.Printf("Starting wallet %v on simnet...", cmd.Name)
+			actor, err := NewActor(connNode, unusedPort)
+			unusedPort++
+			if err != nil {
+				log.Printf("%s: Cannot create actor: %v", cmd.Name, err)
+				return err
+			}
+			if err := actor.Start(os.Stderr, os.Stdout); err != nil {
+				log.Printf("%s: Cannot start actor: %v", actor, err)
+				actor.Shutdown()
+				return err
+			}
+			s.actors[cmd.Name] = actor
+			s.connections[cmd.Name] = []string{cmd.Name2}
+		case "startminer":
+			if cmd.Name == "" {
+				log.Printf("Miner name can't be blank")
+				return errors.New("miner name is blank")
+			}
+			if cmd.Name2 == "" {
+				log.Printf("Miner must connect to an existing node")
+				return errors.New("no node name passed to miner")
+			}
+			if _, used := s.miners[cmd.Name]; used {
+				log.Printf("Name %v already used", cmd.Name)
+				return errors.New("duplicate name for miner")
+			}
+			connNode, used := s.nodes[cmd.Name2]
+			if !used {
+				log.Printf("%v is not an existing node", cmd.Name2)
+				return errors.New("node doesn't exist")
+			}
+			if cmd.Var == "" {
+				log.Printf("Miner %v must be started with mining addresses", cmd.Name)
+				return errors.New("no mining addresses passed for miner")
+			}
+			addrStrings, used := s.vars[cmd.Var]
+			if !used {
+				log.Printf("Variable %v is not set", cmd.Var)
+				return errors.New("variable containing mining addresses isn't set")
+			}
+			miningAddrs := make([]btcutil.Address, len(addrStrings))
+			for i, addr := range addrStrings {
+				miningAddr, err := btcutil.DecodeAddress(addr, &chaincfg.SimNetParams)
+				if err != nil {
+					log.Printf("Couldn't parse address %v", addr)
+					return err
+				}
+				miningAddrs[i] = miningAddr
+			}
+			log.Printf("Starting miner %v on simnet...", cmd.Name)
+			listenPort := unusedPort
+			unusedPort++
+			rpcListenPort := unusedPort
+			unusedPort++
+			miner, err := NewMiner(miningAddrs, *connNode, listenPort, rpcListenPort)
+			if err != nil {
+				log.Printf("Cannot start miner: %v", err)
+				return err
+			}
+			s.miners[cmd.Name] = miner
+			s.connections[cmd.Name] = []string{cmd.Name2}
+			log.Printf("Waiting for synchronization")
+			for {
+				hash1, err := miner.client.GetBestBlockHash()
+				if err != nil {
+					log.Printf("Error getting best block hash from %v: %v",
+						cmd.Name, err)
+					return err
+				}
+				hash2, err := connNode.client.GetBestBlockHash()
+				if err != nil {
+					log.Printf("Error getting best block hash from %v: %v",
+						cmd.Name2, err)
+					return err
+				}
+				if hash1.String() == hash2.String() {
+					break
+				}
+				time.Sleep(time.Second)
+			}
+		case "connect":
+			if cmd.Name == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			if cmd.Name2 == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			var client1 *rpc.Client
+			node1, used := s.nodes[cmd.Name]
+			if !used {
+				miner1, used := s.miners[cmd.Name]
+				if !used {
+					log.Printf("%v is not an existing node or miner", cmd.Name)
+					return errors.New("node or miner does not exist")
+				} else {
+					client1 = miner1.client
+				}
+			} else {
+				client1 = node1.client
+			}
+			node2, used := s.nodes[cmd.Name2]
+			if !used {
+				log.Printf("%v is not an existing node", cmd.Name2)
+				return errors.New("node does not exist")
+			}
+			alreadyConnected := false
+			if conns, used := s.connections[cmd.Name]; used {
+				for _, conn := range conns {
+					if conn == cmd.Name2 {
+						alreadyConnected = true
+					}
+				}
+			}
+			if conns, used := s.connections[cmd.Name2]; used {
+				for _, conn := range conns {
+					if conn == cmd.Name {
+						alreadyConnected = true
+					}
+				}
+			}
+			if alreadyConnected {
+				log.Printf("%v is already connected to %v", cmd.Name, cmd.Name2)
+				return errors.New("nodes already connected to each other")
+			}
+			log.Printf("Connecting %v to %v", cmd.Name, cmd.Name2)
+			client1.AddNode(node2.Args.(*btcdArgs).Listen, rpc.ANAdd)
+			if _, used := s.connections[cmd.Name]; used {
+				s.connections[cmd.Name] = append(s.connections[cmd.Name], cmd.Name2)
+			} else {
+				s.connections[cmd.Name] = []string{cmd.Name2}
+			}
+			log.Printf("Waiting for synchronization")
+			for {
+				hash1, err := client1.GetBestBlockHash()
+				if err != nil {
+					log.Printf("Error getting best block hash from %v: %v",
+						cmd.Name, err)
+					return err
+				}
+				hash2, err := node2.client.GetBestBlockHash()
+				if err != nil {
+					log.Printf("Error getting best block hash from %v: %v",
+						cmd.Name2, err)
+					return err
+				}
+				if hash1.String() == hash2.String() {
+					break
+				}
+				time.Sleep(time.Second)
+			}
+		case "disconnect":
+			if cmd.Name == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			if cmd.Name2 == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			var client1 *rpc.Client
+			var listen1 string
+			node1, used := s.nodes[cmd.Name]
+			if !used {
+				miner1, used := s.miners[cmd.Name]
+				if !used {
+					log.Printf("%v is not an existing node or miner", cmd.Name)
+					return errors.New("node or miner does not exist")
+				} else {
+					client1 = miner1.client
+					listen1 = miner1.Args.(*btcdArgs).Listen
+				}
+			} else {
+				client1 = node1.client
+				listen1 = node1.Args.(*btcdArgs).Listen
+			}
+			node2, used := s.nodes[cmd.Name2]
+			if !used {
+				log.Printf("%v is not an existing node", cmd.Name2)
+				return errors.New("node does not exist")
+			}
+			if conns, used := s.connections[cmd.Name]; used {
+				var updatedConns []string
+				for _, conn := range conns {
+					if conn == cmd.Name2 {
+						log.Printf("Disconnecting %v from %v", cmd.Name, cmd.Name2)
+						client1.AddNode(node2.Args.(*btcdArgs).Listen, rpc.ANRemove)
+					} else {
+						updatedConns = append(updatedConns, conn)
+					}
+				}
+				s.connections[cmd.Name] = updatedConns
+			}
+			if conns, used := s.connections[cmd.Name2]; used {
+				var updatedConns []string
+				for _, conn := range conns {
+					if conn == cmd.Name {
+						log.Printf("Disconnecting %v from %v", cmd.Name2, cmd.Name)
+						node2.client.AddNode(listen1, rpc.ANRemove)
+					} else {
+						updatedConns = append(updatedConns, conn)
+					}
+				}
+				s.connections[cmd.Name2] = updatedConns
+			}
+		case "genaddresses":
+			if cmd.Name == "" {
+				log.Printf("Wallet name can't be blank")
+				return errors.New("wallet name is blank")
+			}
+			wallet, used := s.actors[cmd.Name]
+			if !used {
+				log.Printf("%v is not an existing wallet", cmd.Name)
+				return errors.New("wallet does not exist")
+			}
+			if cmd.Num == 0 {
+				log.Printf("Must specify a nonzero number of addresses to generate")
+				return errors.New("no addresses to generate")
+			}
+			if cmd.Var == "" {
+				log.Printf("Variable name can't be blank")
+				return errors.New("variable name is blank")
+			}
+			log.Printf("Generating %v addresses in %v", cmd.Num, cmd.Name)
+			s.vars[cmd.Var] = make([]string, cmd.Num)
+			for i := uint32(0); i < cmd.Num; i++ {
+				addr, err := wallet.client.GetNewAddress("default")
+				if err != nil {
+					log.Printf("Error generating address: %v", err)
+					return err
+				}
+				s.vars[cmd.Var][i] = addr.String()
+			}
+		case "genblocks":
+			if cmd.Name == "" {
+				log.Printf("Miner name can't be blank")
+				return errors.New("miner name is blank")
+			}
+			miner, used := s.miners[cmd.Name]
+			if !used {
+				log.Printf("%v is not an existing miner", cmd.Name)
+				return errors.New("miner does not exist")
+			}
+			if cmd.Num == 0 {
+				log.Printf("Must specify a nonzero number of blocks to generate")
+				return errors.New("no blocks to generate")
+			}
+			log.Printf("Generating %v blocks on %v", cmd.Num, cmd.Name)
+			_, err := miner.client.Generate(cmd.Num)
+			if err != nil {
+				log.Printf("Error generating blocks: %v", err)
+				return err
+			}
+		case "gentxs":
 		}
-		s.actors = append(s.actors, a)
 	}
 
-	// if we receive an interrupt, proceed to shutdown
-	addInterruptHandler(func() {
-		close(s.com.exit)
-	})
+	/*
 
-	// Start simulation.
-	tpsChan, tpbChan := s.com.Start(s.actors, node, s.txCurve)
-	s.com.WaitForShutdown()
+		log.Println("Starting node on simnet...")
+		args, err := newBtcdArgs("node")
+		if err != nil {
+			log.Printf("Cannot create node args: %v", err)
+			return err
+		}
+		logFile, err := getLogFile(args.prefix)
+		if err != nil {
+			log.Printf("Cannot get log file, logging disabled: %v", err)
+		}
+		node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+		if err != nil {
+			log.Printf("%s: Cannot create node: %v", node, err)
+			return err
+		}
+		if err := node.Start(); err != nil {
+			log.Printf("%s: Cannot start node: %v", node, err)
+			return err
+		}
+		if err := node.Connect(); err != nil {
+			log.Printf("%s: Cannot connect to node: %v", node, err)
+			return err
+		}
 
-	tps, ok := <-tpsChan
-	if ok && !math.IsNaN(tps) {
-		log.Printf("Average transactions per sec: %.2f", tps)
-	}
+		// Register for block notifications.
+		if err := node.client.NotifyBlocks(); err != nil {
+			log.Printf("%s: Cannot register for block notifications: %v", node, err)
+			return err
+		}
 
-	tpb, ok := <-tpbChan
-	if ok && tpb > 0 {
-		log.Printf("Maximum transactions per block: %v", tpb)
-	}
+		// Register for transaction notifications
+		if err := node.client.NotifyNewTransactions(false); err != nil {
+			log.Printf("%s: Cannot register for transactions notifications: %v", node, err)
+			return err
+		}
+
+		for i := 0; i < *numActors; i++ {
+			a, err := NewActor(node, uint16(18557+i))
+			if err != nil {
+				log.Printf("%s: Cannot create actor: %v", a, err)
+				continue
+			}
+			s.actors = append(s.actors, a)
+		}
+
+		// if we receive an interrupt, proceed to shutdown
+		addInterruptHandler(func() {
+			close(s.com.exit)
+		})
+
+		// Start simulation.
+		tpsChan, tpbChan := s.com.Start(s.actors, node, s.txCurve)
+		s.com.WaitForShutdown()
+
+		tps, ok := <-tpsChan
+		if ok && !math.IsNaN(tps) {
+			log.Printf("Average transactions per sec: %.2f", tps)
+		}
+
+		tpb, ok := <-tpbChan
+		if ok && tpb > 0 {
+			log.Printf("Maximum transactions per block: %v", tpb)
+		}
+	*/
 	return nil
 }

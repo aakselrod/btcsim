@@ -53,7 +53,7 @@ type btcwalletArgs struct {
 func newBtcwalletArgs(port uint16, nodeArgs *btcdArgs) (*btcwalletArgs, error) {
 	a := &btcwalletArgs{
 		RPCListen:    fmt.Sprintf("127.0.0.1:%d", port),
-		RPCConnect:   "127.0.0.1:18556",
+		RPCConnect:   nodeArgs.RPCListen,
 		Username:     "user",
 		Password:     "pass",
 		Certificates: nodeArgs.certificates,

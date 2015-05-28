@@ -36,20 +36,6 @@ var (
 	// maxConnRetries defines the number of times to retry rpc client connections
 	maxConnRetries = flag.Int("maxconnretries", 30, "Maximum retries to connect to rpc client")
 
-	// numActors defines the number of actors to spawn
-	numActors = flag.Int("actors", 1, "Number of actors to be launched")
-
-	// stopBlock defines how many blocks have to connect to the blockchain
-	// before the simulation normally stops
-	stopBlock = flag.Int("stopblock", 15000, "Block height to stop the simulation at")
-
-	// startBlock defines after which block the blockchain is start enough to start
-	// controlled mining as per the tx curve
-	startBlock = flag.Int("startblock", 15000, "Block height to start the simulation at")
-
-	// maxAddresses defines the number of addresses to generate per actor
-	maxAddresses = flag.Int("maxaddresses", 100, "Maximum addresses per actor")
-
 	// maxBlockSize defines the maximum block size to be passed as -blockmaxsize to the miner
 	maxBlockSize = flag.Int("maxblocksize", 999000, "Maximum block size in bytes used by the miner")
 
@@ -59,9 +45,9 @@ var (
 	// profile
 	profile = flag.String("profile", "6060", "Listen address for profiling server")
 
-	// txCurvePath is the path to a CSV file containing the block, utxo count, tx count
-	txCurvePath = flag.String("txcurve", "",
-		"Path to the CSV File containing block, utxo count, tx count fields")
+	// simFilePath is the path to a YAML file containing simulation commands
+	simFilePath = flag.String("simfile", "",
+		"Path to the YAML file containing simulation commands")
 )
 
 var (
@@ -104,10 +90,12 @@ func main() {
 	}
 
 	simulation := NewSimulation()
-	simulation.readTxCurve(*txCurvePath)
-	simulation.updateFlags()
-	if err := simulation.Start(); err != nil {
-		log.Printf("Cannot start simulation: %v", err)
+	if err := simulation.readSimFile(*simFilePath); err != nil {
+		log.Printf("Cannot read simfile: %v", err)
+		os.Exit(1)
+	}
+	if err := simulation.Run(); err != nil {
+		log.Printf("Simulation failed: %v", err)
 		os.Exit(1)
 	}
 }
