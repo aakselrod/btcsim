@@ -30,12 +30,13 @@ import (
 // SimCommand represents a single command in the CSV file and holds
 // all of the arguments (though some may be nil, depending on command).
 type SimCommand struct {
-	Cmd   string
-	Name  string `yaml:omitempty`
-	Name2 string `yaml:omitempty`
-	Var   string `yaml:omitempty`
-	Num   uint32 `yaml:omitempty`
-	Num2  uint32 `yaml:omitempty`
+	Cmd    string
+	Name   string `yaml:omitempty`
+	Name2  string `yaml:omitempty`
+	StrArg string `yaml:omitempty`
+	Var    string `yaml:omitempty`
+	Num    uint32 `yaml:omitempty`
+	Num2   uint32 `yaml:omitempty`
 }
 
 // readYAML reads the given filename and returns a slice of commands

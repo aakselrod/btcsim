@@ -17,15 +17,18 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
 	//"math"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
-	//"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcd/wire"
 	rpc "github.com/btcsuite/btcrpcclient"
 	"github.com/btcsuite/btcutil"
 )
@@ -187,23 +190,38 @@ func (s *Simulation) Run() error {
 			if cmd.Name2 != "" {
 				s.connections[cmd.Name] = []string{cmd.Name2}
 				log.Printf("Waiting for synchronization")
+				var lastHash1, lastHash2 *wire.ShaHash
+				var lastHeight1, lastHeight2 int32
 				for {
-					hash1, err := node.client.GetBestBlockHash()
+					hash1, height1, err := node.client.GetBestBlock()
 					if err != nil {
 						log.Printf("Error getting best block hash from %v: %v",
 							cmd.Name, err)
 						return err
 					}
-					hash2, err := connNode.client.GetBestBlockHash()
+					hash2, height2, err := connNode.client.GetBestBlock()
 					if err != nil {
 						log.Printf("Error getting best block hash from %v: %v",
 							cmd.Name2, err)
 						return err
 					}
-					if hash1.String() == hash2.String() {
+					if lastHash1 == hash1 && lastHash2 == hash2 &&
+						lastHeight1 == height1 && lastHeight2 == height2 {
+						log.Printf("Synchronization stuck: %v at %v (%v); %v at %v (%v)",
+							cmd.Name, height1, hash1.String(), cmd.Name2, height2,
+							hash2.String())
+						return err
+					}
+					if hash1.String() == hash2.String() && height1 == height2 {
+						log.Printf("%v and %v are synchronized at height %v (%v)",
+							cmd.Name, cmd.Name2, height1, hash1.String())
 						break
 					}
 					time.Sleep(time.Second)
+					lastHash1 = hash1
+					lastHash2 = hash2
+					lastHeight1 = height1
+					lastHeight2 = height2
 				}
 			}
 		case "startwallet":
@@ -287,23 +305,38 @@ func (s *Simulation) Run() error {
 			s.miners[cmd.Name] = miner
 			s.connections[cmd.Name] = []string{cmd.Name2}
 			log.Printf("Waiting for synchronization")
+			var lastHash1, lastHash2 *wire.ShaHash
+			var lastHeight1, lastHeight2 int32
 			for {
-				hash1, err := miner.client.GetBestBlockHash()
+				hash1, height1, err := miner.client.GetBestBlock()
 				if err != nil {
 					log.Printf("Error getting best block hash from %v: %v",
 						cmd.Name, err)
 					return err
 				}
-				hash2, err := connNode.client.GetBestBlockHash()
+				hash2, height2, err := connNode.client.GetBestBlock()
 				if err != nil {
 					log.Printf("Error getting best block hash from %v: %v",
 						cmd.Name2, err)
 					return err
 				}
-				if hash1.String() == hash2.String() {
+				if lastHash1 == hash1 && lastHash2 == hash2 &&
+					lastHeight1 == height1 && lastHeight2 == height2 {
+					log.Printf("Synchronization stuck: %v at %v (%v); %v at %v (%v)",
+						cmd.Name, height1, hash1.String(), cmd.Name2, height2,
+						hash2.String())
+					return err
+				}
+				if hash1.String() == hash2.String() && height1 == height2 {
+					log.Printf("%v and %v are synchronized at height %v (%v)",
+						cmd.Name, cmd.Name2, height1, hash1.String())
 					break
 				}
 				time.Sleep(time.Second)
+				lastHash1 = hash1
+				lastHash2 = hash2
+				lastHeight1 = height1
+				lastHeight2 = height2
 			}
 		case "connect":
 			if cmd.Name == "" {
@@ -359,23 +392,38 @@ func (s *Simulation) Run() error {
 				s.connections[cmd.Name] = []string{cmd.Name2}
 			}
 			log.Printf("Waiting for synchronization")
+			var lastHash1, lastHash2 *wire.ShaHash
+			var lastHeight1, lastHeight2 int32
 			for {
-				hash1, err := client1.GetBestBlockHash()
+				hash1, height1, err := client1.GetBestBlock()
 				if err != nil {
 					log.Printf("Error getting best block hash from %v: %v",
 						cmd.Name, err)
 					return err
 				}
-				hash2, err := node2.client.GetBestBlockHash()
+				hash2, height2, err := node2.client.GetBestBlock()
 				if err != nil {
 					log.Printf("Error getting best block hash from %v: %v",
 						cmd.Name2, err)
 					return err
 				}
-				if hash1.String() == hash2.String() {
+				if lastHash1 == hash1 && lastHash2 == hash2 &&
+					lastHeight1 == height1 && lastHeight2 == height2 {
+					log.Printf("Synchronization stuck: %v at %v (%v); %v at %v (%v)",
+						cmd.Name, height1, hash1.String(), cmd.Name2, height2,
+						hash2.String())
+					return err
+				}
+				if hash1.String() == hash2.String() && height1 == height2 {
+					log.Printf("%v and %v are synchronized at height %v (%v)",
+						cmd.Name, cmd.Name2, height1, hash1.String())
 					break
 				}
 				time.Sleep(time.Second)
+				lastHash1 = hash1
+				lastHash2 = hash2
+				lastHeight1 = height1
+				lastHeight2 = height2
 			}
 		case "disconnect":
 			if cmd.Name == "" {
@@ -480,6 +528,185 @@ func (s *Simulation) Run() error {
 				return err
 			}
 		case "gentxs":
+		case "debuglevel":
+			if cmd.Name == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			var client *rpc.Client
+			node, used := s.nodes[cmd.Name]
+			if !used {
+				miner, used := s.miners[cmd.Name]
+				if !used {
+					log.Printf("%v is not an existing node or miner", cmd.Name)
+					return errors.New("node or miner does not exist")
+				} else {
+					client = miner.client
+				}
+			} else {
+				client = node.client
+			}
+			log.Printf("Setting debuglevel for %v to %v", cmd.Name, cmd.StrArg)
+			result, err := client.DebugLevel(cmd.StrArg)
+			if result != "Done." || err != nil {
+				log.Printf("Error setting debuglevel: %v (%v)", result, err.Error())
+				return err
+			}
+		case "shell":
+			if cmd.StrArg == "" {
+				log.Printf("Command can't be blank")
+				return errors.New("command is blank")
+			}
+			log.Printf("Executing command: %v", cmd.StrArg)
+			shellCmd := exec.Command("bash", "-c", cmd.StrArg)
+			out, err := shellCmd.CombinedOutput()
+			log.Printf(string(out))
+			if err != nil {
+				log.Printf("Error executing command: %v", err)
+				return errors.New("error executing command")
+			}
+			if cmd.Var != "" {
+				s.vars[cmd.Var] = strings.Split(string(out), "\n")
+			}
+		case "savechain":
+			if cmd.Name == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			if cmd.StrArg == "" {
+				log.Printf("Filename can't be blank")
+				return errors.New("filename is blank")
+			}
+			var client *rpc.Client
+			node, used := s.nodes[cmd.Name]
+			if !used {
+				miner, used := s.miners[cmd.Name]
+				if !used {
+					log.Printf("%v is not an existing node or miner", cmd.Name)
+					return errors.New("node or miner does not exist")
+				} else {
+					client = miner.client
+				}
+			} else {
+				client = node.client
+			}
+			bc, err := client.GetBlockCount()
+			if err != nil {
+				log.Printf("Error getting block count: %v", err)
+				return errors.New("can't get block count")
+			}
+			fo, err := os.Create(cmd.StrArg)
+			if err != nil {
+				log.Printf("Error creating file: %v", err)
+				return errors.New("can't create file")
+			}
+			err = binary.Write(fo, binary.BigEndian, &bc)
+			if err != nil {
+				fo.Close()
+				log.Printf("Can't write block count to file: %v", err)
+				return errors.New("can't write block count to file")
+			}
+			log.Printf("Writing %v blocks to %v", bc, cmd.StrArg)
+			for height := int64(1); height <= bc; height++ {
+				hash, err := client.GetBlockHash(height)
+				if err != nil {
+					fo.Close()
+					log.Printf("Error getting block hash for block %v", height)
+					return errors.New("can't get block hash")
+				}
+				block, err := client.GetBlock(hash)
+				if err != nil {
+					fo.Close()
+					log.Printf("Error getting block %v(%v)", height, hash)
+					return errors.New("can't get block")
+				}
+				blockBytes, err := block.Bytes()
+				if err != nil {
+					fo.Close()
+					log.Printf("Error getting bytes for block %v: %v", height, err)
+					return errors.New("can't get bytes for block")
+				}
+				bs := int64(len(blockBytes))
+				err = binary.Write(fo, binary.BigEndian, &bs)
+				if err != nil {
+					fo.Close()
+					log.Printf("Can't write block size to file: %v", err)
+					return errors.New("can't write block size to file")
+				}
+				_, err = fo.Write(blockBytes)
+				if err != nil {
+					fo.Close()
+					log.Printf("Can't write block %v to file: %v", height, err)
+					return errors.New("can't write block to file")
+				}
+			}
+			fo.Close()
+		case "loadchain":
+			if cmd.Name == "" {
+				log.Printf("Miner or node name can't be blank")
+				return errors.New("miner or node name is blank")
+			}
+			if cmd.StrArg == "" {
+				log.Printf("Filename can't be blank")
+				return errors.New("filename is blank")
+			}
+			var client *rpc.Client
+			node, used := s.nodes[cmd.Name]
+			if !used {
+				miner, used := s.miners[cmd.Name]
+				if !used {
+					log.Printf("%v is not an existing node or miner", cmd.Name)
+					return errors.New("node or miner does not exist")
+				} else {
+					client = miner.client
+				}
+			} else {
+				client = node.client
+			}
+			fi, err := os.Open(cmd.StrArg)
+			if err != nil {
+				log.Printf("Error opening file: %v", err)
+				return errors.New("can't open file")
+			}
+			var bc int64
+			err = binary.Read(fi, binary.BigEndian, &bc)
+			if err != nil {
+				fi.Close()
+				log.Printf("Can't read block count from file: %v", err)
+				return errors.New("can't read block count from file")
+			}
+			log.Printf("Reading %v blocks from %v", bc, cmd.StrArg)
+			for height := int64(1); height <= bc; height++ {
+				var bs int64
+				err = binary.Read(fi, binary.BigEndian, &bs)
+				if err != nil {
+					fi.Close()
+					log.Printf("Can't read block size from file: %v", err)
+					return errors.New("can't read block size from file")
+				}
+				blockBytes := make([]byte, bs)
+				_, err := fi.Read(blockBytes)
+				if err != nil {
+					fi.Close()
+					log.Printf("Can't read block %v from file: %v", height, err)
+					return errors.New("can't read block from file")
+				}
+				block, err := btcutil.NewBlockFromBytes(blockBytes)
+				if err != nil {
+					fi.Close()
+					log.Printf("Can't convert bytes into block %v: %v", height, err)
+					return errors.New("can't convert bytes into block")
+				}
+				err = client.SubmitBlock(block, nil)
+				if err != nil {
+					fi.Close()
+					log.Printf("Error submitting block %v: %v", height, err)
+					return errors.New("can't submit block")
+				}
+			}
+			fi.Close()
+		case "savetx":
+		case "loadtx":
 		}
 	}
 
