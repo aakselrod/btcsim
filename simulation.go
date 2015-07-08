@@ -118,6 +118,24 @@ func (s *Simulation) Run() error {
 		}
 	}
 
+	defer func() {
+		log.Printf("Stopping all wallets...")
+		for name, actor := range s.actors {
+			log.Printf("Stopping wallet %v", name)
+			actor.Shutdown()
+		}
+		log.Printf("Stopping all miners...")
+		for name, miner := range s.miners {
+			log.Printf("Stopping miner %v", name)
+			miner.Shutdown()
+		}
+		log.Printf("Stopping all nodes...")
+		for name, node := range s.nodes {
+			log.Printf("Stopping node %v", name)
+			node.Shutdown()
+		}
+	}()
+
 	ntfnHandlers := &rpc.NotificationHandlers{
 	/*
 		OnBlockConnected: func(hash *wire.ShaHash, height int32) {
@@ -559,6 +577,44 @@ func (s *Simulation) Run() error {
 			}
 			log.Printf("Executing command: %v", cmd.StrArg)
 			shellCmd := exec.Command("bash", "-c", cmd.StrArg)
+			out, err := shellCmd.CombinedOutput()
+			log.Printf(string(out))
+			if err != nil {
+				log.Printf("Error executing command: %v", err)
+				return errors.New("error executing command")
+			}
+			if cmd.Var != "" {
+				s.vars[cmd.Var] = strings.Split(string(out), "\n")
+			}
+		case "btcctl":
+			if cmd.StrArg == "" {
+				log.Printf("Command can't be blank")
+				return errors.New("command is blank")
+			}
+			if cmd.Name == "" {
+				log.Printf("Target name can't be blank")
+				return errors.New("target name is blank")
+			}
+			cmdline := "btcctl --simnet -u user -P pass -c ~/.btcsim/rpc.cert -s "
+			node1, used := s.nodes[cmd.Name]
+			if !used {
+				miner1, used := s.miners[cmd.Name]
+				if !used {
+					actor1, used := s.actors[cmd.Name]
+					if !used {
+						log.Printf("%v is not an existing target", cmd.Name)
+						return errors.New("target does not exist")
+					} else {
+						cmdline = cmdline + actor1.Args.(*btcwalletArgs).RPCListen
+					}
+				} else {
+					cmdline = cmdline + miner1.Args.(*btcdArgs).RPCListen
+				}
+			} else {
+				cmdline = cmdline + node1.Args.(*btcdArgs).RPCListen
+			}
+			log.Printf("Executing command against %v: %v", cmd.Name, cmd.StrArg)
+			shellCmd := exec.Command("bash", "-c", cmdline+" "+cmd.StrArg)
 			out, err := shellCmd.CombinedOutput()
 			log.Printf(string(out))
 			if err != nil {

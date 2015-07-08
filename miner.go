@@ -58,7 +58,7 @@ func NewMiner(miningAddrs []btcutil.Address, connNode Node, listen uint16,
 		}
 	}
 
-	args.Extra = append(args.Extra, fmt.Sprintf("--addpeer=127.0.0.1:%v",
+	args.Extra = append(args.Extra, fmt.Sprintf("--addpeer=%v",
 		(connNode.Args.(*btcdArgs)).Listen))
 
 	logFile, err := getLogFile(args.prefix)
