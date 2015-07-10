@@ -17,64 +17,32 @@
 package main
 
 import (
-	"io"
-	"reflect"
-	"strings"
+	"io/ioutil"
 	"testing"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
-/*
-// fakeReader implements the io.Reader interface and is used to force
-// read errors
-type fakeReader struct {
-	n   int
-	err error
-}
-
-// Read returns the fake reader error and the lesser of the fake reader value
-// and the length of p.
-func (r *fakeReader) Read(p []byte) (int, error) {
-	n := r.n
-	if n > len(p) {
-		n = len(p)
-	}
-	return n, r.err
-}
-
-var fakeCSV = `
-20000,40000,20000
-`
-
-var fakeInvalidCSV = `
-foo,bar,spam
-`
-
-func TestReadCSV(t *testing.T) {
-	txCurve, err := readCSV(strings.NewReader(fakeCSV))
+func TestReadYAML(t *testing.T) {
+	files, err := ioutil.ReadDir("testdata/valid-yaml")
 	if err != nil {
-		t.Errorf("readCSV error: %v", err)
+		t.Errorf("ReadDir error: %v", err)
 	}
-	expectedTxCurve := map[int32]*Row{
-		20000: &Row{
-			utxoCount: 40000,
-			txCount:   20000,
-		},
-	}
-	if !reflect.DeepEqual(txCurve, expectedTxCurve) {
-		t.Errorf("readCSV got: %v want: %v", spew.Sdump(txCurve), spew.Sdump(expectedTxCurve))
+	for _, file := range files {
+		_, err := readYAML("testdata/valid-yaml/" + file.Name())
+		if err != nil {
+			t.Errorf("readYAML error: %v", err)
+		}
 	}
 }
 
-func TestReadCSVErrors(t *testing.T) {
-	_, err := readCSV(&fakeReader{n: 0, err: io.ErrClosedPipe})
-	if err == nil {
-		t.Errorf("readCSV expected error, got %v", err)
+func TestReadYAMLErrors(t *testing.T) {
+	files, err := ioutil.ReadDir("testdata/invalid-yaml")
+	if err != nil {
+		t.Errorf("ReadDir error: %v", err)
 	}
-	_, err = readCSV(strings.NewReader(fakeInvalidCSV))
-	if err == nil {
-		t.Errorf("readCSV expected error, got %v", err)
+	for _, file := range files {
+		_, err := readYAML("testdata/invalid-yaml/" + file.Name())
+		if err == nil {
+			t.Errorf("readYAML should have errored out on file %v but didn't", file.Name())
+		}
 	}
 }
-*/

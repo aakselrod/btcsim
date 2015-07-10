@@ -546,30 +546,6 @@ func (s *Simulation) Run() error {
 				return err
 			}
 		case "gentxs":
-		case "debuglevel":
-			if cmd.Name == "" {
-				log.Printf("Miner or node name can't be blank")
-				return errors.New("miner or node name is blank")
-			}
-			var client *rpc.Client
-			node, used := s.nodes[cmd.Name]
-			if !used {
-				miner, used := s.miners[cmd.Name]
-				if !used {
-					log.Printf("%v is not an existing node or miner", cmd.Name)
-					return errors.New("node or miner does not exist")
-				} else {
-					client = miner.client
-				}
-			} else {
-				client = node.client
-			}
-			log.Printf("Setting debuglevel for %v to %v", cmd.Name, cmd.StrArg)
-			result, err := client.DebugLevel(cmd.StrArg)
-			if result != "Done." || err != nil {
-				log.Printf("Error setting debuglevel: %v (%v)", result, err.Error())
-				return err
-			}
 		case "shell":
 			if cmd.StrArg == "" {
 				log.Printf("Command can't be blank")
