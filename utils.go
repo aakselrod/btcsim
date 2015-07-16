@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -30,13 +31,14 @@ import (
 // SimCommand represents a single command in the CSV file and holds
 // all of the arguments (though some may be nil, depending on command).
 type SimCommand struct {
-	Cmd    string
-	Name   string `yaml:omitempty`
-	Name2  string `yaml:omitempty`
-	StrArg string `yaml:omitempty`
-	Var    string `yaml:omitempty`
-	Num    uint32 `yaml:omitempty`
-	Num2   uint32 `yaml:omitempty`
+	Cmd      string
+	Name     string `yaml:omitempty`
+	Name2    string `yaml:omitempty`
+	StrArg   string `yaml:omitempty`
+	Template string `yaml:omitempty`
+	Var      string `yaml:omitempty`
+	Num      uint32 `yaml:omitempty`
+	Num2     uint32 `yaml:omitempty`
 }
 
 // readYAML reads the given filename and returns a slice of commands
@@ -86,4 +88,16 @@ func fileExists(name string) bool {
 		}
 	}
 	return true
+}
+
+// getUnusedPort returns a local port that isn't listening but can't guarantee
+// that after the function returns, no other process will have bound to it.
+func getUnusedPort() (uint16, error) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	port := uint16(listener.Addr().(*net.TCPAddr).Port)
+	err = listener.Close()
+	return port, err
 }

@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
@@ -59,7 +61,7 @@ type Simulation struct {
 	actors      map[string]*Actor
 	miners      map[string]*Miner
 	connections map[string][]string
-	vars        map[string][]string
+	vars        map[string]string
 }
 
 // NewSimulation returns a Simulation instance
@@ -70,7 +72,7 @@ func NewSimulation() *Simulation {
 		actors:      make(map[string]*Actor),
 		miners:      make(map[string]*Miner),
 		connections: make(map[string][]string),
-		vars:        make(map[string][]string),
+		vars:        make(map[string]string),
 	}
 	return s
 }
@@ -154,8 +156,6 @@ func (s *Simulation) Run() error {
 	*/
 	}
 
-	unusedPort := uint16(18550)
-
 	for _, cmd := range s.commands {
 		switch cmd.Cmd {
 		case "startnode":
@@ -176,8 +176,17 @@ func (s *Simulation) Run() error {
 			if err != nil {
 				log.Printf("Cannot get log file, logging disabled: %v", err)
 			}
+			unusedPort, err := getUnusedPort()
+			if err != nil {
+				log.Printf("Cannot get unused local TCP port: %v", err)
+				return errors.New("can't get unused local TCP port")
+			}
 			args.Listen = fmt.Sprintf("127.0.0.1:%v", unusedPort)
-			unusedPort++
+			unusedPort, err = getUnusedPort()
+			if err != nil {
+				log.Printf("Cannot get unused local TCP port: %v", err)
+				return errors.New("can't get unused local TCP port")
+			}
 			args.RPCListen = fmt.Sprintf("127.0.0.1:%v", unusedPort)
 			unusedPort++
 			var connNode Node
@@ -261,8 +270,12 @@ func (s *Simulation) Run() error {
 				return errors.New("node doesn't exist")
 			}
 			log.Printf("Starting wallet %v on simnet...", cmd.Name)
+			unusedPort, err := getUnusedPort()
+			if err != nil {
+				log.Printf("Cannot get unused local TCP port: %v", err)
+				return errors.New("can't get unused local TCP port")
+			}
 			actor, err := NewActor(connNode, unusedPort)
-			unusedPort++
 			if err != nil {
 				log.Printf("%s: Cannot create actor: %v", cmd.Name, err)
 				return err
@@ -296,7 +309,8 @@ func (s *Simulation) Run() error {
 				log.Printf("Miner %v must be started with mining addresses", cmd.Name)
 				return errors.New("no mining addresses passed for miner")
 			}
-			addrStrings, used := s.vars[cmd.Var]
+			addrsString, used := s.vars[cmd.Var]
+			addrStrings := strings.Split(addrsString, "\n")
 			if !used {
 				log.Printf("Variable %v is not set", cmd.Var)
 				return errors.New("variable containing mining addresses isn't set")
@@ -311,10 +325,16 @@ func (s *Simulation) Run() error {
 				miningAddrs[i] = miningAddr
 			}
 			log.Printf("Starting miner %v on simnet...", cmd.Name)
-			listenPort := unusedPort
-			unusedPort++
-			rpcListenPort := unusedPort
-			unusedPort++
+			listenPort, err := getUnusedPort()
+			if err != nil {
+				log.Printf("Cannot get unused local TCP port: %v", err)
+				return errors.New("can't get unused local TCP port")
+			}
+			rpcListenPort, err := getUnusedPort()
+			if err != nil {
+				log.Printf("Cannot get unused local TCP port: %v", err)
+				return errors.New("can't get unused local TCP port")
+			}
 			miner, err := NewMiner(miningAddrs, *connNode, listenPort, rpcListenPort)
 			if err != nil {
 				log.Printf("Cannot start miner: %v", err)
@@ -516,14 +536,19 @@ func (s *Simulation) Run() error {
 				return errors.New("variable name is blank")
 			}
 			log.Printf("Generating %v addresses in %v", cmd.Num, cmd.Name)
-			s.vars[cmd.Var] = make([]string, cmd.Num)
-			for i := uint32(0); i < cmd.Num; i++ {
-				addr, err := wallet.client.GetNewAddress("default")
+			addr, err := wallet.client.GetNewAddress("default")
+			if err != nil {
+				log.Printf("Error generating address: %v", err)
+				return err
+			}
+			s.vars[cmd.Var] = addr.String()
+			for i := uint32(1); i < cmd.Num; i++ {
+				addr, err = wallet.client.GetNewAddress("default")
 				if err != nil {
 					log.Printf("Error generating address: %v", err)
 					return err
 				}
-				s.vars[cmd.Var][i] = addr.String()
+				s.vars[cmd.Var] = s.vars[cmd.Var] + "\n" + addr.String()
 			}
 		case "genblocks":
 			if cmd.Name == "" {
@@ -547,9 +572,23 @@ func (s *Simulation) Run() error {
 			}
 		case "gentxs":
 		case "shell":
-			if cmd.StrArg == "" {
+			if cmd.Template == "" && cmd.StrArg == "" {
 				log.Printf("Command can't be blank")
 				return errors.New("command is blank")
+			}
+			if cmd.Template != "" {
+				tmpl, err := template.New("template").Parse(cmd.Template)
+				if err != nil {
+					log.Printf("Error parsing template: %v", err)
+					return errors.New("error parsing template")
+				}
+				var tmplBytes bytes.Buffer
+				err = tmpl.Execute(&tmplBytes, s.vars)
+				if err != nil {
+					log.Printf("Error executing template: %v", err)
+					return errors.New("error executing template")
+				}
+				cmd.StrArg = tmplBytes.String()
 			}
 			log.Printf("Executing command: %v", cmd.StrArg)
 			shellCmd := exec.Command("bash", "-c", cmd.StrArg)
@@ -560,12 +599,26 @@ func (s *Simulation) Run() error {
 				return errors.New("error executing command")
 			}
 			if cmd.Var != "" {
-				s.vars[cmd.Var] = strings.Split(string(out), "\n")
+				s.vars[cmd.Var] = strings.TrimSuffix(string(out), "\n")
 			}
 		case "btcctl":
-			if cmd.StrArg == "" {
+			if cmd.Template == "" && cmd.StrArg == "" {
 				log.Printf("Command can't be blank")
 				return errors.New("command is blank")
+			}
+			if cmd.Template != "" {
+				tmpl, err := template.New("template").Parse(cmd.Template)
+				if err != nil {
+					log.Printf("Error parsing template: %v", err)
+					return errors.New("error parsing template")
+				}
+				var tmplBytes bytes.Buffer
+				err = tmpl.Execute(&tmplBytes, s.vars)
+				if err != nil {
+					log.Printf("Error executing template: %v", err)
+					return errors.New("error executing template")
+				}
+				cmd.StrArg = tmplBytes.String()
 			}
 			if cmd.Name == "" {
 				log.Printf("Target name can't be blank")
@@ -598,7 +651,7 @@ func (s *Simulation) Run() error {
 				return errors.New("error executing command")
 			}
 			if cmd.Var != "" {
-				s.vars[cmd.Var] = strings.Split(string(out), "\n")
+				s.vars[cmd.Var] = strings.TrimSuffix(string(out), "\n")
 			}
 		case "savechain":
 			if cmd.Name == "" {
